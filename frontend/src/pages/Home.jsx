@@ -5,7 +5,7 @@ const RUN = BASE + "/run-model-stream";
 const STREAM = BASE + "/stream-chunks";
 const CHUNK = (f) => `${BASE}/chunks/${f}`;
 const STOP = BASE + "/stop-watcher";
-const TTS = "http://localhost:5000/api/tts-gc";
+const TTS = `${import.meta.env.VITE_BACKEND_URL}/api/tts-gc`;
 
 export default function LiveVideoStream() {
   const [logs, setLogs] = useState("Idle");
