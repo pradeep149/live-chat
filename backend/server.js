@@ -18,7 +18,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.join(__dirname, "public");
 
-app.use(cors({ origin: "*", methods: ["GET", "POST"], credentials: true }));
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
