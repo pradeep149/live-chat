@@ -1,6 +1,6 @@
 import React, { useState, useRef } from "react";
 
-const BASE = "https://igdaowy0zqky0n-8000.proxy.runpod.net";
+const BASE = "http://phkipjalknwbtb-8000.proxy.runpod.net";
 const RUN = BASE + "/run-model-stream";
 const STREAM = BASE + "/stream-chunks";
 const CHUNK = (f) => `${BASE}/chunks/${f}`;
@@ -36,22 +36,39 @@ export default function LiveVideoStream() {
     }
   };
 
-  const onUpdateEnd = () => {
-    offset = sb.buffered.end(sb.buffered.length - 1);
-    if (pending.length && !sb.updating) {
+  let expected = 0;
+  const waiting = new Map();
+
+  const parseIdx = (name) => Number(name.match(/chunk_(\d+)\.mp4/)[1]);
+
+  const tryFlush = () => {
+    while (waiting.has(expected) && !sb.updating) {
+      const buf = waiting.get(expected);
+      waiting.delete(expected);
       sb.timestampOffset = offset;
-      sb.appendBuffer(pending.shift());
+      sb.appendBuffer(buf);
+      expected += 1;
     }
-    if (sb.buffered.length && videoRef.current.paused)
-      videoRef.current.play().catch(() => {});
   };
 
   const fetchChunk = async (name) => {
+    const idx = parseIdx(name);
     const r = await fetch(CHUNK(name));
-    if (!r.ok) return;
+    if (!r.ok) {
+      log(`${name} ${r.status}`);
+      return;
+    }
     const buf = await r.arrayBuffer();
-    log(`chunk ${Math.round(buf.byteLength / 1024)} KB`);
-    append(buf);
+    log(`chunk ${idx} ${Math.round(buf.byteLength / 1024)} KB`);
+    waiting.set(idx, buf);
+    tryFlush();
+  };
+
+  const onUpdateEnd = () => {
+    offset = sb.buffered.end(sb.buffered.length - 1);
+    tryFlush();
+    if (sb.buffered.length && videoRef.current.paused)
+      videoRef.current.play().catch(() => {});
   };
 
   const openSSE = () => {
@@ -61,7 +78,6 @@ export default function LiveVideoStream() {
     esRef.current.onerror = () => log("SSE error");
   };
 
-  /* ---------- cleanup ---------- */
   const closeAll = () => {
     if (esRef.current) {
       esRef.current.close();
@@ -75,7 +91,6 @@ export default function LiveVideoStream() {
     log("Stream ended");
   };
 
-  /* ---------- main flow ---------- */
   const start = async () => {
     if (!text.trim()) {
       alert("Enter text");
@@ -91,13 +106,6 @@ export default function LiveVideoStream() {
         body: JSON.stringify({ text }),
       });
       if (!tts.ok) throw Error("TTS");
-      const { audioUrl } = await tts.json();
-      const blob = await (await fetch(audioUrl)).blob();
-
-      const fd = new FormData();
-      fd.append("file", blob, "tts.wav");
-      const rs = await fetch(RUN, { method: "POST", body: fd });
-      if (!rs.ok) throw Error("/run-model-stream");
 
       ms = new MediaSource();
       videoRef.current.src = URL.createObjectURL(ms);
@@ -112,7 +120,7 @@ export default function LiveVideoStream() {
           return;
         }
         sb = ms.addSourceBuffer(mime);
-        sb.mode = "segments"; // keep segments mode
+        sb.mode = "segments";
         sb.addEventListener("updateend", onUpdateEnd);
         setCanStop(true);
         log("waiting first chunk …");

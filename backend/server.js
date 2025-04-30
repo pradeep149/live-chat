@@ -1,81 +1,15 @@
-// import express from "express";
-// import dotenv from "dotenv";
-// import cors from "cors";
-// import connectDB from "./config/mongodb.js";
-// import OpenAI from "openai";
-// import path from "path";
-// import { fileURLToPath } from "url";
-// import { pipeline } from "stream";
-// import fs from "fs";
-// import { promisify } from "util";
-
-// dotenv.config();
-
-// const app = express();
-// const __filename = fileURLToPath(import.meta.url);
-// const __dirname = path.dirname(__filename);
-// const publicDir = path.join(__dirname, "public");
-// app.use(cors());
-// app.use(express.json());
-
-// const openai = new OpenAI();
-// const backendUrl = process.env.BACKEND_URL;
-
-// if (!fs.existsSync(publicDir)) {
-//   fs.mkdirSync(publicDir, { recursive: true });
-// }
-
-// const streamPipeline = promisify(pipeline);
-
-// app.use("/public", express.static(publicDir));
-
-// app.post("/api/tts", async (req, res) => {
-//   const { text } = req.body;
-//   if (!text) return res.status(400).json({ error: "No text provided" });
-
-//   try {
-//     const response = await openai.audio.speech.create({
-//       model: "tts-1",
-//       voice: "sage",
-//       input: text,
-//       response_format: "wav",
-//     });
-
-//     const fileName = `audio_${Date.now()}.wav`;
-//     const filePath = path.join(publicDir, fileName);
-
-//     const fileStream = fs.createWriteStream(filePath);
-//     await streamPipeline(response.body, fileStream);
-
-//     res.json({ audioUrl: `${backendUrl}/public/${fileName}` });
-//   } catch (error) {
-//     console.error("TTS Error:", error);
-//     res.status(500).json({ error: "Error generating audio" });
-//   }
-// });
-
-// app.get("/", (req, res) => {
-//   res.send("API is running...");
-// });
-
-// app.get("/api/test", (req, res) => {
-//   res.json({ message: "Backend is connected to Frontend!" });
-// });
-
-// const PORT = process.env.PORT || 5000;
-// app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
-import connectDB from "./config/mongodb.js";
 import OpenAI from "openai";
 import { TextToSpeechClient } from "@google-cloud/text-to-speech";
 import path from "path";
 import { fileURLToPath } from "url";
-import { pipeline, Readable } from "stream";
+import { pipeline } from "stream";
 import fs from "fs";
 import { promisify } from "util";
+import axios from "axios";
+import FormData from "form-data";
 
 dotenv.config();
 
@@ -84,91 +18,74 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicDir = path.join(__dirname, "public");
 
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    credentials: true,
-  })
-);
-
+app.use(cors({ origin: "*", methods: ["GET", "POST"], credentials: true }));
 app.use(express.json());
 
-const backendUrl = process.env.BACKEND_URL;
+if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
 
 const openai = new OpenAI();
-
-const clientEmailGc = process.env.CLIENT_EMAIL_GC;
-const privateKeyGc =
-  process.env.PRIVATE_KEY_GC &&
-  process.env.PRIVATE_KEY_GC.replace(/\\n/g, "\n");
+const backendUrl = process.env.BACKEND_URL;
 
 const gcClient = new TextToSpeechClient({
-  credentials: { client_email: clientEmailGc, private_key: privateKeyGc },
+  credentials: {
+    client_email: process.env.CLIENT_EMAIL_GC,
+    private_key: process.env.PRIVATE_KEY_GC?.replace(/\\n/g, "\n"),
+  },
 });
 
-if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
 const streamPipeline = promisify(pipeline);
+
 app.use("/public", express.static(publicDir));
 
 app.post("/api/tts", async (req, res) => {
   const { text } = req.body;
-  if (!text) return res.status(400).json({ error: "No text provided" });
+  if (!text) return res.sendStatus(400);
 
-  try {
-    const response = await openai.audio.speech.create({
-      model: "tts-1",
-      voice: "sage",
-      input: text,
-      response_format: "wav",
-    });
+  const response = await openai.audio.speech.create({
+    model: "tts-1",
+    voice: "sage",
+    input: text,
+    response_format: "wav",
+  });
 
-    const fileName = `audio_${Date.now()}.wav`;
-    const filePath = path.join(publicDir, fileName);
-    const fileStream = fs.createWriteStream(filePath);
-    await streamPipeline(response.body, fileStream);
+  const file = `audio_${Date.now()}.wav`;
+  const out = fs.createWriteStream(path.join(publicDir, file));
+  await streamPipeline(response.body, out);
 
-    res.json({ audioUrl: `${backendUrl}/public/${fileName}` });
-  } catch (err) {
-    console.error("OpenAI TTS Error:", err);
-    res.status(500).json({ error: "Error generating audio" });
-  }
+  res.json({ audioUrl: `${backendUrl}/public/${file}` });
 });
 
 app.post("/api/tts-gc", async (req, res) => {
   const { text, langCode = "en-US", gender = "FEMALE", pitch = 1.2 } = req.body;
-  if (!text) return res.status(400).json({ error: "No text provided" });
+  if (!text) return res.sendStatus(400);
 
-  try {
-    const request = {
-      input: { text },
-      voice: { languageCode: langCode, ssmlGender: gender },
-      audioConfig: { audioEncoding: "LINEAR16", pitch },
-    };
+  const [tts] = await gcClient.synthesizeSpeech({
+    input: { text },
+    voice: { languageCode: langCode, ssmlGender: gender },
+    audioConfig: { audioEncoding: "LINEAR16", pitch },
+  });
+  if (!tts.audioContent) return res.sendStatus(500);
 
-    const [response] = await gcClient.synthesizeSpeech(request);
-    if (!response.audioContent)
-      return res.status(500).json({ error: "No audio content" });
+  const form = new FormData();
+  form.append("file", tts.audioContent, {
+    filename: `tts.wav`,
+    contentType: "audio/wav",
+  });
 
-    const fileName = `audio_${Date.now()}.wav`;
-    const filePath = path.join(publicDir, fileName);
+  await axios.post(
+    "https://phkipjalknwbtb-8000.proxy.runpod.net/run-model-stream",
+    form,
+    {
+      headers: form.getHeaders(),
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    }
+  );
 
-    const bufferStream = Readable.from(response.audioContent);
-    const fileStream = fs.createWriteStream(filePath);
-
-    await streamPipeline(bufferStream, fileStream);
-
-    res.json({ audioUrl: `${backendUrl}/public/${fileName}` });
-  } catch (err) {
-    console.error("Google TTS Error:", err);
-    res.status(500).json({ error: "Error generating audio" });
-  }
+  res.json({ ok: true });
 });
 
-app.get("/", (_req, res) => res.send("API is running..."));
-app.get("/api/test", (_req, res) =>
-  res.json({ message: "Backend is connected to Frontend!" })
-);
+app.get("/", (_, res) => res.send("API OK"));
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
