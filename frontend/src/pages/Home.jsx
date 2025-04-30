@@ -1,6 +1,6 @@
 import React, { useState, useRef } from "react";
 
-const BASE = "http://phkipjalknwbtb-8000.proxy.runpod.net";
+const BASE = "https://phkipjalknwbtb-8000.proxy.runpod.net";
 const RUN = BASE + "/run-model-stream";
 const STREAM = BASE + "/stream-chunks";
 const CHUNK = (f) => `${BASE}/chunks/${f}`;
