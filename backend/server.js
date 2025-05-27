@@ -1,99 +1,70 @@
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
-import OpenAI from "openai";
-import { TextToSpeechClient } from "@google-cloud/text-to-speech";
-import path from "path";
-import { fileURLToPath } from "url";
-import { pipeline } from "stream";
-import fs from "fs";
-import { promisify } from "util";
 import axios from "axios";
-import FormData from "form-data";
 
 dotenv.config();
 
+if (!process.env.OPENAI_API_KEY)
+  throw new Error("Missing OPENAI_API_KEY in .env");
+
 const app = express();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const publicDir = path.join(__dirname, "public");
+const PORT = process.env.PORT || 5000;
 
-const allowedOrigins = ["https://text-to-video-app-one.vercel.app"];
-
-app.use(
-  cors({
-    origin: allowedOrigins,
-    credentials: true,
-  })
-);
-
+app.use(cors({ origin: "*", credentials: true }));
 app.use(express.json());
 
-if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
-
-const openai = new OpenAI();
-const backendUrl = process.env.BACKEND_URL;
-
-const gcClient = new TextToSpeechClient({
-  credentials: {
-    client_email: process.env.CLIENT_EMAIL_GC,
-    private_key: process.env.PRIVATE_KEY_GC?.replace(/\\n/g, "\n"),
+const history = [
+  {
+    role: "system",
+    content:
+      "You are a helpful assistant Keep every reply under 100 words or 8 sentences, talk like a regular human being",
   },
+];
+
+app.post("/api/chat", async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: "No text provided" });
+
+    /* -------- ChatGPT call -------- */
+    const openaiResp = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        model: "gpt-4o-mini",
+        messages: [...history, { role: "user", content: text }],
+      },
+      {
+        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+        timeout: 30000,
+      }
+    );
+
+    let gptReply = openaiResp.data.choices[0].message.content.trim();
+
+    history.push({ role: "user", content: text });
+    history.push({ role: "assistant", content: gptReply });
+
+    const fastapiUrl =
+      process.env.FASTAPI_URL ||
+      "https://phkipjalknwbtb-8000.proxy.runpod.net/run-model-stream";
+
+    const runpodResp = await axios.post(
+      fastapiUrl,
+      { text: gptReply },
+      { timeout: 30000 }
+    );
+
+    res.status(200).json({
+      gpt_reply: gptReply,
+      forwarded: true,
+      id: runpodResp.data.id,
+    });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ error: "Internal error" });
+  }
 });
 
-const streamPipeline = promisify(pipeline);
-
-app.use("/public", express.static(publicDir));
-
-app.post("/api/tts", async (req, res) => {
-  const { text } = req.body;
-  if (!text) return res.sendStatus(400);
-
-  const response = await openai.audio.speech.create({
-    model: "tts-1",
-    voice: "sage",
-    input: text,
-    response_format: "wav",
-  });
-
-  const file = `audio_${Date.now()}.wav`;
-  const out = fs.createWriteStream(path.join(publicDir, file));
-  await streamPipeline(response.body, out);
-
-  res.json({ audioUrl: `${backendUrl}/public/${file}` });
-});
-
-app.post("/api/tts-gc", async (req, res) => {
-  const { text, langCode = "en-US", gender = "FEMALE", pitch = 1.2 } = req.body;
-  if (!text) return res.sendStatus(400);
-
-  const [tts] = await gcClient.synthesizeSpeech({
-    input: { text },
-    voice: { languageCode: langCode, ssmlGender: gender },
-    audioConfig: { audioEncoding: "LINEAR16", pitch },
-  });
-  if (!tts.audioContent) return res.sendStatus(500);
-
-  const form = new FormData();
-  form.append("file", tts.audioContent, {
-    filename: `tts.wav`,
-    contentType: "audio/wav",
-  });
-
-  await axios.post(
-    "https://phkipjalknwbtb-8000.proxy.runpod.net/run-model-stream",
-    form,
-    {
-      headers: form.getHeaders(),
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-    }
-  );
-
-  res.json({ ok: true });
-});
-
-app.get("/", (_, res) => res.send("API OK"));
-
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.get("/", (_req, res) => res.send("Node gateway running"));
+app.listen(PORT, () => console.log(`Gateway on port ${PORT}`));
