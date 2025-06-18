@@ -18,7 +18,7 @@ const history = [
   {
     role: "system",
     content:
-      "You are a helpful assistant Keep every reply under 100 words or 6 sentences and a minimum of 4 sentences as well, talk like a regular human being",
+      "You are a helpful assistant Keep every reply under 80 words or 6 sentences and a minimum of 4 sentences as well, talk like a regular human being",
   },
 ];
 
